@@ -108,18 +108,20 @@ def register():
         conn = get_db()
         from psycopg2.extras import RealDictCursor
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        # Insert team
+
         cur.execute("""
             INSERT INTO teams
-              (registration_id, team_name, category, project_title, abstract, status, registered_at)
-            VALUES (%s,%s,%s,%s,%s,'pending', NOW())
-        """, (reg_id, data["team_name"].strip(), data["category"],
-              data["project_title"].strip(), data["abstract"].strip()))
-        cur.execute("""
-        INSERT INTO teams (...) VALUES (...) RETURNING id
-        """, (...))
-
-        team_id = cur.fetchone()[0]
+            (registration_id, team_name, category, project_title, abstract, status, registered_at)
+            VALUES (%s, %s, %s, %s, %s, 'pending', CURRENT_TIMESTAMP)
+            RETURNING id
+        """, (
+            reg_id,
+            data["team_name"].strip(),
+            data["category"],
+            data["project_title"].strip(),
+            data["abstract"].strip()
+        ))
+        cur.fetchone()["id"]  
 
         # Insert leader
         cur.execute("""
