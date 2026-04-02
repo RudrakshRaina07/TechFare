@@ -19,20 +19,12 @@ from email.mime.multipart import MIMEMultipart
 from functools import wraps
 
 from flask import Flask, request, jsonify, send_from_directory, abort
-import mysql.connector
-from mysql.connector import Error
+# import mysql.connector
+# from mysql.connector import Error
 
 # ────────────────────────────────────────────
 #  CONFIGURATION  (edit before running)
 # ────────────────────────────────────────────
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
-    "port": int(os.getenv("DB_PORT")),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASSWORD"),
-    "database": os.getenv("DB_NAME")
-}
-
 
 # Admin credentials (change these!)
 ADMIN_CREDENTIALS = {
@@ -68,8 +60,8 @@ def admin_page():
 
 
 # ── DB HELPER ───────────────────────────────
-def get_db():
-    return mysql.connector.connect(**DB_CONFIG)
+# def get_db():
+#     return mysql.connector.connect(**DB_CONFIG)
 
 
 # ── AUTH DECORATOR ──────────────────────────
@@ -123,7 +115,11 @@ def register():
             VALUES (%s,%s,%s,%s,%s,'pending', NOW())
         """, (reg_id, data["team_name"].strip(), data["category"],
               data["project_title"].strip(), data["abstract"].strip()))
-        team_id = cur.lastrowid
+        cur.execute("""
+        INSERT INTO teams (...) VALUES (...) RETURNING id
+        """, (...))
+
+        team_id = cur.fetchone()[0]
 
         # Insert leader
         cur.execute("""
@@ -155,7 +151,7 @@ def register():
 
         return jsonify({"message": "Registration submitted successfully", "registration_id": reg_id}), 200
 
-    except Error as e:
+    except Exception as e:
         app.logger.error(f"DB error on register: {e}")
         return jsonify({"error": "Database error. Please try again."}), 500
 
@@ -186,7 +182,8 @@ def admin_login():
 def admin_get_teams():
     try:
         conn = get_db()
-        cur = conn.cursor(dictionary=True)
+        from psycopg2.extras import RealDictCursor
+        cur = conn.cursor(cursor_factory=RealDictCursor)        
         cur.execute("""
             SELECT
                 t.id, t.registration_id, t.team_name, t.category,
@@ -210,7 +207,7 @@ def admin_get_teams():
         cur.close(); conn.close()
         return jsonify({"teams": teams}), 200
 
-    except Error as e:
+    except Exception  as e:
         app.logger.error(f"DB error on admin/teams: {e}")
         return jsonify({"error": "Database error"}), 500
 
@@ -241,7 +238,7 @@ def admin_get_team(team_id):
         cur.close(); conn.close()
         return jsonify(team), 200
 
-    except Error as e:
+    except Exception as e:
         app.logger.error(f"DB error on team detail: {e}")
         return jsonify({"error": "Database error"}), 500
 
@@ -274,7 +271,7 @@ def admin_update_status(team_id):
         leader = cur.fetchone()
 
         # Update status
-        cur.execute("UPDATE teams SET status=%s, updated_at=NOW() WHERE id=%s", (new_status, team_id))
+        cur.execute("UPDATE teams SET status=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s", (new_status, team_id))
         conn.commit()
         cur.close(); conn.close()
 
@@ -291,7 +288,7 @@ def admin_update_status(team_id):
 
         return jsonify({"message": f"Team {new_status} and email sent successfully"}), 200
 
-    except Error as e:
+    except Exception as e:
         app.logger.error(f"DB error on status update: {e}")
         return jsonify({"error": "Database error"}), 500
 
