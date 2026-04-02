@@ -157,139 +157,161 @@ def register():
 # ────────────────────────────────────────────
 #  ADMIN — LOGIN
 # ────────────────────────────────────────────
+# ────────────────────────────────────────────
+# ADMIN ROUTES (FINAL CLEAN VERSION)
+# ────────────────────────────────────────────
+
+from psycopg2.extras import RealDictCursor
+
+# ── ADMIN LOGIN ─────────────────────────────
 @app.route("/api/admin/login", methods=["POST"])
 def admin_login():
     data = request.get_json(force=True) or {}
+
     username = data.get("username", "").strip()
     password = data.get("password", "")
 
-    stored = ADMIN_CREDENTIALS.get(username)
-    if not stored or stored != password:
+    if ADMIN_CREDENTIALS.get(username) != password:
         return jsonify({"error": "Invalid credentials"}), 401
 
     token = secrets.token_hex(32)
     _admin_tokens[token] = username
+
     return jsonify({"token": token, "username": username}), 200
 
 
-# ────────────────────────────────────────────
-#  ADMIN — GET ALL TEAMS (list)
-# ────────────────────────────────────────────
+# ── GET ALL TEAMS ───────────────────────────
 @app.route("/api/admin/teams", methods=["GET"])
 @require_admin
 def admin_get_teams():
     try:
         conn = get_db()
-        from psycopg2.extras import RealDictCursor
-        cur = conn.cursor(cursor_factory=RealDictCursor)        
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
         cur.execute("""
             SELECT
                 t.id, t.registration_id, t.team_name, t.category,
                 t.project_title, t.status, t.registered_at,
-                (SELECT name  FROM team_members WHERE team_id=t.id AND is_leader=1 LIMIT 1) AS leader_name,
-                (SELECT email FROM team_members WHERE team_id=t.id AND is_leader=1 LIMIT 1) AS leader_email,
-                (SELECT phone FROM team_members WHERE team_id=t.id AND is_leader=1 LIMIT 1) AS leader_phone,
-                (SELECT branch FROM team_members WHERE team_id=t.id AND is_leader=1 LIMIT 1) AS leader_branch,
-                (SELECT semester FROM team_members WHERE team_id=t.id AND is_leader=1 LIMIT 1) AS leader_semester,
+                (SELECT name FROM team_members WHERE team_id=t.id AND is_leader=TRUE LIMIT 1) AS leader_name,
+                (SELECT email FROM team_members WHERE team_id=t.id AND is_leader=TRUE LIMIT 1) AS leader_email,
+                (SELECT phone FROM team_members WHERE team_id=t.id AND is_leader=TRUE LIMIT 1) AS leader_phone,
+                (SELECT branch FROM team_members WHERE team_id=t.id AND is_leader=TRUE LIMIT 1) AS leader_branch,
+                (SELECT semester FROM team_members WHERE team_id=t.id AND is_leader=TRUE LIMIT 1) AS leader_semester,
                 (SELECT COUNT(*) FROM team_members WHERE team_id=t.id) AS member_count
             FROM teams t
             ORDER BY t.registered_at DESC
         """)
+
         teams = cur.fetchall()
 
-        # Make datetime JSON-serialisable
         for t in teams:
             if isinstance(t.get("registered_at"), datetime.datetime):
                 t["registered_at"] = t["registered_at"].isoformat()
 
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
+
         return jsonify({"teams": teams}), 200
 
-    except Exception  as e:
-        app.logger.error(f"DB error on admin/teams: {e}")
+    except Exception as e:
+        print("ERROR:", e)
         return jsonify({"error": "Database error"}), 500
 
 
-# ────────────────────────────────────────────
-#  ADMIN — GET SINGLE TEAM (detail)
-# ────────────────────────────────────────────
+# ── GET SINGLE TEAM ─────────────────────────
 @app.route("/api/admin/teams/<int:team_id>", methods=["GET"])
 @require_admin
 def admin_get_team(team_id):
     try:
         conn = get_db()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
         cur.execute("SELECT * FROM teams WHERE id=%s", (team_id,))
         team = cur.fetchone()
+
         if not team:
-            cur.close(); conn.close()
             return jsonify({"error": "Team not found"}), 404
 
-        cur.execute("SELECT * FROM team_members WHERE team_id=%s ORDER BY is_leader DESC, id ASC", (team_id,))
+        cur.execute("""
+            SELECT * FROM team_members
+            WHERE team_id=%s
+            ORDER BY is_leader DESC, id ASC
+        """, (team_id,))
         members = cur.fetchall()
 
         team["members"] = members
+
         if isinstance(team.get("registered_at"), datetime.datetime):
             team["registered_at"] = team["registered_at"].isoformat()
 
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
+
         return jsonify(team), 200
 
     except Exception as e:
-        app.logger.error(f"DB error on team detail: {e}")
+        print("ERROR:", e)
         return jsonify({"error": "Database error"}), 500
 
 
-# ────────────────────────────────────────────
-#  ADMIN — UPDATE STATUS + SEND EMAIL
-# ────────────────────────────────────────────
+# ── UPDATE STATUS ───────────────────────────
 @app.route("/api/admin/teams/<int:team_id>/status", methods=["POST"])
 @require_admin
 def admin_update_status(team_id):
     data = request.get_json(force=True) or {}
+
     new_status = data.get("status", "").lower()
     custom_msg = data.get("message", "")
 
     if new_status not in ("approved", "rejected"):
-        return jsonify({"error": "Status must be 'approved' or 'rejected'"}), 400
+        return jsonify({"error": "Invalid status"}), 400
 
     try:
         conn = get_db()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Fetch team + leader
+        # Fetch team
         cur.execute("SELECT * FROM teams WHERE id=%s", (team_id,))
         team = cur.fetchone()
+
         if not team:
-            cur.close(); conn.close()
             return jsonify({"error": "Team not found"}), 404
 
-        cur.execute("SELECT * FROM team_members WHERE team_id=%s AND is_leader=1 LIMIT 1", (team_id,))
+        # Fetch leader
+        cur.execute("""
+            SELECT * FROM team_members
+            WHERE team_id=%s AND is_leader=TRUE
+            LIMIT 1
+        """, (team_id,))
         leader = cur.fetchone()
 
         # Update status
-        cur.execute("UPDATE teams SET status=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s", (new_status, team_id))
-        conn.commit()
-        cur.close(); conn.close()
+        cur.execute("""
+            UPDATE teams
+            SET status=%s, updated_at=CURRENT_TIMESTAMP
+            WHERE id=%s
+        """, (new_status, team_id))
 
-        # Send email
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        # Optional: send email (if configured)
         if leader and leader.get("email"):
             _send_decision_email(
-                to_email=leader["email"],
-                leader_name=leader["name"],
-                team_name=team["team_name"],
-                reg_id=team["registration_id"],
-                status=new_status,
-                custom_msg=custom_msg
+                leader["email"],
+                leader["name"],
+                team["team_name"],
+                team["registration_id"],
+                new_status,
+                custom_msg
             )
 
-        return jsonify({"message": f"Team {new_status} and email sent successfully"}), 200
+        return jsonify({"message": f"Team {new_status} successfully"}), 200
 
     except Exception as e:
-        app.logger.error(f"DB error on status update: {e}")
+        print("ERROR:", e)
         return jsonify({"error": "Database error"}), 500
-
 
 # ────────────────────────────────────────────
 #  EMAIL HELPERS
