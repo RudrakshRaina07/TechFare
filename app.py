@@ -33,6 +33,7 @@ DB_CONFIG = {
     "database": os.getenv("DB_NAME")
 }
 
+
 # Admin credentials (change these!)
 ADMIN_CREDENTIALS = {
     os.getenv("ADMIN_1_USERNAME"): os.getenv("ADMIN_1_PASSWORD"),
@@ -45,6 +46,7 @@ SMTP_PORT = int(os.getenv("SMTP_PORT"))
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME")
+
 
 # Token store (in-memory; for production use Redis/DB)
 _admin_tokens: dict[str, str] = {}  # token → username
@@ -112,8 +114,8 @@ def register():
 
     try:
         conn = get_db()
-        cur = conn.cursor()
-
+        from psycopg2.extras import RealDictCursor
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         # Insert team
         cur.execute("""
             INSERT INTO teams
@@ -372,6 +374,11 @@ def _send_decision_email(to_email, leader_name, team_name, reg_id, status, custo
     _send_via_smtp(_build_email(to_email, subject, body), to_email)
 
 
+import psycopg2
+import os
+
+def get_db():
+    return psycopg2.connect(os.getenv("DATABASE_URL"))
 # ────────────────────────────────────────────
 #  ENTRY POINT
 # ────────────────────────────────────────────
