@@ -79,36 +79,19 @@ def require_admin(f):
 # ────────────────────────────────────────────
 #  PUBLIC — REGISTRATION
 # ────────────────────────────────────────────
+from psycopg2.extras import RealDictCursor
+
 @app.route("/api/register", methods=["POST"])
 def register():
     data = request.get_json(force=True)
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
 
-    # ── Validate required top-level fields ──
-    required = ["team_name", "category", "project_title", "abstract", "leader"]
-    missing = [f for f in required if not data.get(f)]
-    if missing:
-        return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
-
-    leader = data["leader"]
-    leader_required = ["name", "roll", "email", "phone", "branch", "semester"]
-    missing_leader = [f for f in leader_required if not leader.get(f)]
-    if missing_leader:
-        return jsonify({"error": f"Leader fields missing: {', '.join(missing_leader)}"}), 400
-
-    members = data.get("members", [])
-    if len(members) > 4:
-        return jsonify({"error": "Maximum 4 additional members allowed (5 total with leader)"}), 400
-
-    # ── Generate registration ID ──
     reg_id = f"UTK2K26-{uuid.uuid4().hex[:8].upper()}"
 
     try:
         conn = get_db()
-        from psycopg2.extras import RealDictCursor
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
+        # ✅ STEP 1: Insert team
         cur.execute("""
             INSERT INTO teams
             (registration_id, team_name, category, project_title, abstract, status, registered_at)
@@ -121,42 +104,55 @@ def register():
             data["project_title"].strip(),
             data["abstract"].strip()
         ))
-        cur.fetchone()["id"]  
 
-        # Insert leader
+        # ✅ STEP 2: Get team_id (MUST be here)
+        team_id = cur.fetchone()["id"]
+
+        # ✅ STEP 3: Use team_id AFTER defining it
+        leader = data["leader"]
+
         cur.execute("""
             INSERT INTO team_members
-              (team_id, name, roll_number, email, phone, branch, semester, is_leader)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,1)
-        """, (team_id, leader["name"].strip(), leader["roll"].strip(),
-              leader["email"].strip(), leader["phone"].strip(),
-              leader["branch"].strip(), leader["semester"]))
+            (team_id, name, roll_number, email, phone, branch, semester, is_leader)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,TRUE)
+        """, (
+            team_id,
+            leader["name"].strip(),
+            leader["roll"].strip(),
+            leader["email"].strip(),
+            leader["phone"].strip(),
+            leader["branch"].strip(),
+            leader["semester"]
+        ))
 
-        # Insert additional members
-        for m in members:
+        # Members
+        for m in data.get("members", []):
             if not m.get("name"):
                 continue
+
             cur.execute("""
                 INSERT INTO team_members
-                  (team_id, name, roll_number, email, phone, branch, semester, is_leader)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,0)
-            """, (team_id, m.get("name","").strip(), m.get("roll","").strip(),
-                  m.get("email","").strip(), m.get("phone","").strip(),
-                  m.get("branch","").strip(), m.get("semester","")))
+                (team_id, name, roll_number, email, phone, branch, semester, is_leader)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,FALSE)
+            """, (
+                team_id,
+                m.get("name","").strip(),
+                m.get("roll","").strip(),
+                m.get("email","").strip(),
+                m.get("phone","").strip(),
+                m.get("branch","").strip(),
+                m.get("semester","")
+            ))
 
         conn.commit()
         cur.close()
         conn.close()
 
-        # Send acknowledgement email to leader
-        _send_ack_email(leader["email"], leader["name"], data["team_name"], reg_id)
-
-        return jsonify({"message": "Registration submitted successfully", "registration_id": reg_id}), 200
+        return jsonify({"message": "Success", "registration_id": reg_id}), 200
 
     except Exception as e:
-        app.logger.error(f"DB error on register: {e}")
-        return jsonify({"error": "Database error. Please try again."}), 500
-
+        print("ERROR:", e)
+        return jsonify({"error": "Database error"}), 500
 
 # ────────────────────────────────────────────
 #  ADMIN — LOGIN
